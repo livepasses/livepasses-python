@@ -18,7 +18,6 @@ from livepasses.types import (
     BatchOperationInfo,
     BatchStatistics,
     BatchStatusResult,
-    BulkUpdatePassesParams,
     BusinessContext,
     BusinessData,
     BusinessMetrics,
@@ -52,7 +51,11 @@ from livepasses.types import (
     PassRedemptionResult,
     PassValidationResult,
     PersonalizationData,
+    PushTemplatePassesParams,
+    MembershipCheckInParams,
+    RedeemByScanParams,
     RedeemCouponParams,
+    RedeemGiftCardParams,
     RedeemPassParams,
     RedemptionLocation,
     ResponseMetadata,
@@ -89,7 +92,6 @@ __all__ = [
     "BatchOperationInfo",
     "BatchStatistics",
     "BatchStatusResult",
-    "BulkUpdatePassesParams",
     "BusinessContext",
     "BusinessData",
     "BusinessMetrics",
@@ -117,7 +119,11 @@ __all__ = [
     "PassRedemptionResult",
     "PassValidationResult",
     "PersonalizationData",
+    "PushTemplatePassesParams",
+    "MembershipCheckInParams",
+    "RedeemByScanParams",
     "RedeemCouponParams",
+    "RedeemGiftCardParams",
     "RedeemPassParams",
     "RedemptionLocation",
     "UnifiedBusinessData",
@@ -134,4 +140,4 @@ __all__ = [
     "WebhookEventType",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

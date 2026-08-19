@@ -165,6 +165,34 @@ class RedeemCouponParams:
 
 
 @dataclass
+class RedeemGiftCardParams:
+    """Parameters for deducting an amount from a gift card's balance."""
+
+    amount: float
+    reason: str | None = None
+    redemption_channel: str | None = None
+
+
+@dataclass
+class MembershipCheckInParams:
+    """Parameters for checking in a membership pass."""
+
+    gate: str | None = None
+    redemption_method: str | None = None
+
+
+@dataclass
+class RedeemByScanParams:
+    """Parameters for resolving a scanned value and redeeming it in one call."""
+
+    scanned_value: str
+    redemption_method: str | None = None
+    redemption_channel: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+@dataclass
 class LoyaltyTransactionParams:
     """Parameters for a loyalty transaction."""
 
@@ -182,11 +210,11 @@ class UpdatePassParams:
 
 
 @dataclass
-class BulkUpdatePassesParams:
-    """Parameters for bulk-updating passes."""
+class PushTemplatePassesParams:
+    """Parameters for pushing a scoped update to all eligible passes of a template."""
 
-    pass_ids: list[str]
-    updates: UpdatePassParams
+    updated_fields: dict[str, object]
+    reason: str | None = None
 
 
 @dataclass

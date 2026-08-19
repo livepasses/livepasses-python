@@ -176,19 +176,16 @@ client.passes.update("pass-001", UpdatePassParams(
 ))
 ```
 
-### Bulk Update
+### Push a scoped update
 
-Update multiple passes at once:
+Push field updates to all eligible passes of a template:
 
 ```python
-from livepasses import BulkUpdatePassesParams
+from livepasses import PushTemplatePassesParams
 
-client.passes.bulk_update(BulkUpdatePassesParams(
-    pass_ids=["pass-001", "pass-002", "pass-003"],
-    business_data=BusinessData(member_tier="Gold"),
-    business_context=BusinessContext(
-        loyalty=LoyaltyContext(seasonal_message="Happy holidays from our team!"),
-    ),
+client.passes.push_template("template-id", PushTemplatePassesParams(
+    updated_fields={"gate": "Gate C"},
+    reason="Event-wide gate change",
 ))
 ```
 

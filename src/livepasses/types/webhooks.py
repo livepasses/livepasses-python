@@ -5,14 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+# Events the API accepts on a webhook subscription. Mirrors the server's allow-list exactly:
+# subscribing to anything outside it is rejected with a 400, so a value that is not here is not
+# a "not yet supported" event - it is a request that always fails.
 WebhookEventType = Literal[
     "pass.generated",
     "pass.redeemed",
     "pass.updated",
-    "pass.expired",
-    "pass.checked_in",
-    "batch.completed",
-    "batch.failed",
+    "loyalty.transacted",
+    "coupon.applied",
+    "transfer.initiated",
+    "transfer.accepted",
+    "transfer.declined",
+    "transfer.revoked",
+    "transfer.expired",
+    "*",  # every event above
 ]
 
 

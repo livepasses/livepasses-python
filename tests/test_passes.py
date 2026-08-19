@@ -14,7 +14,10 @@ from livepasses import (
     Livepasses,
     LookupPassParams,
     LoyaltyTransactionParams,
+    MembershipCheckInParams,
     PassRecipient,
+    RedeemByScanParams,
+    RedeemGiftCardParams,
 )
 from tests.mocks import (
     MOCK_BATCH_GENERATION_RESULT,
@@ -155,3 +158,48 @@ def test_get_batch_status(httpx_mock: HTTPXMock, client: Livepasses) -> None:
     result = client.passes.get_batch_status("batch-002")
     assert result.is_completed is True
     assert result.statistics.passes_generated == 5
+
+
+def test_redeem_gift_card(httpx_mock: HTTPXMock, client: Livepasses) -> None:
+    httpx_mock.add_response(json=mock_api_response(MOCK_REDEMPTION_RESULT))
+    client.passes.redeem_gift_card("pass-001", RedeemGiftCardParams(amount=25.0, reason="Purchase"))
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert request.url.path == "/api/passes/pass-001/giftcard/redeem"
+
+
+def test_membership_check_in(httpx_mock: HTTPXMock, client: Livepasses) -> None:
+    httpx_mock.add_response(json=mock_api_response(MOCK_REDEMPTION_RESULT))
+    client.passes.membership_check_in("pass-001", MembershipCheckInParams(gate="Main Entrance"))
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert request.url.path == "/api/passes/pass-001/membership/check-in"
+
+
+def test_stamp_sends_empty_body_not_none(httpx_mock: HTTPXMock, client: Livepasses) -> None:
+    """The endpoint binds a request DTO: a None body sends no Content-Type and answers 415."""
+    httpx_mock.add_response(json=mock_api_response(MOCK_REDEMPTION_RESULT))
+    client.passes.stamp("pass-001")
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert request.url.path == "/api/passes/pass-001/stamp"
+    assert request.content == b"{}"
+    assert request.headers["content-type"].startswith("application/json")
+
+
+def test_unstamp_sends_empty_body_not_none(httpx_mock: HTTPXMock, client: Livepasses) -> None:
+    httpx_mock.add_response(json=mock_api_response(MOCK_REDEMPTION_RESULT))
+    client.passes.unstamp("pass-001")
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert request.url.path == "/api/passes/pass-001/unstamp"
+    assert request.content == b"{}"
+
+
+def test_redeem_by_scan(httpx_mock: HTTPXMock, client: Livepasses) -> None:
+    httpx_mock.add_response(json=mock_api_response(MOCK_REDEMPTION_RESULT))
+    client.passes.redeem_by_scan(RedeemByScanParams(scanned_value="LP:abc", redemption_method="nfc"))
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert request.url.path == "/api/passes/redeem-by-scan"
+    assert b"scannedValue" in request.content

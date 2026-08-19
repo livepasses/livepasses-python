@@ -31,7 +31,7 @@ def main() -> None:
         webhook = client.webhooks.create(
             CreateWebhookParams(
                 url="https://your-app.com/webhooks/livepasses",
-                events=["pass.generated", "pass.redeemed", "pass.checked_in", "batch.completed"],
+                events=["pass.generated", "pass.redeemed", "pass.updated", "transfer.accepted"],
             )
         )
         print(f"  Webhook ID: {webhook.id}")

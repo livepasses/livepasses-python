@@ -13,7 +13,6 @@ from livepasses.types.passes import (
     BatchOperationInfo,
     BatchStatusResult,
     BatchStatistics,
-    BulkUpdatePassesParams,
     CheckInParams,
     GenerateAndWaitOptions,
     GeneratePassesParams,
@@ -23,12 +22,16 @@ from livepasses.types.passes import (
     ListPassesParams,
     LookupPassParams,
     LoyaltyTransactionParams,
+    MembershipCheckInParams,
+    RedeemByScanParams,
+    RedeemGiftCardParams,
     PassGenerationResult,
     PassLookupResult,
     PassPlatform,
     PassPlatforms,
     PassRedemptionResult,
     PassValidationResult,
+    PushTemplatePassesParams,
     RedeemCouponParams,
     RedeemPassParams,
     UnifiedBusinessData,
@@ -116,14 +119,24 @@ class PassesResource:
         """Update a pass."""
         self._http.put(f"/api/passes/{pass_id}", params)
 
-    def bulk_update(self, params: BulkUpdatePassesParams) -> None:
-        """Bulk-update multiple passes."""
-        self._http.post("/api/passes/bulk-update", params)
+    def push_template(self, template_id: str, params: PushTemplatePassesParams) -> None:
+        """Push a scoped update to all eligible passes of a template."""
+        self._http.post(f"/api/passes/template/{template_id}/push", params)
 
     def redeem(
         self, pass_id: str, params: RedeemPassParams | None = None
     ) -> PassRedemptionResult:
-        """Redeem a pass."""
+        """Redeem a single-use pass.
+
+        Redeeming is terminal, so a pass the holder is meant to keep using must not go
+        through here. Multi-use passes are refused with ``422`` / ``OPERATION_NOT_ALLOWED``
+        instead of being consumed. Use the operation built for the type:
+
+        - loyalty and stamp cards: ``stamp()`` (and ``unstamp()`` to undo)
+        - memberships: ``membership_check_in()``, which does not consume the pass
+        - coupons that allow multiple redemptions: ``redeem_coupon()``
+        - gift cards: ``redeem_gift_card()``, which takes the amount to deduct
+        """
         data = self._http.post(f"/api/passes/{pass_id}/redeem", params)
         return _build_dataclass(PassRedemptionResult, data)
 
@@ -146,6 +159,55 @@ class PassesResource:
     ) -> PassRedemptionResult:
         """Perform a loyalty transaction (earn or spend points)."""
         data = self._http.post(f"/api/passes/{pass_id}/loyalty/transact", params)
+        return _build_dataclass(PassRedemptionResult, data)
+
+    def redeem_gift_card(
+        self, pass_id: str, params: RedeemGiftCardParams
+    ) -> PassRedemptionResult:
+        """Deduct an amount from a gift card's balance.
+
+        Rejected when the amount exceeds the remaining balance; the balance is left
+        untouched in that case.
+        """
+        data = self._http.post(f"/api/passes/{pass_id}/giftcard/redeem", params)
+        return _build_dataclass(PassRedemptionResult, data)
+
+    def membership_check_in(
+        self, pass_id: str, params: MembershipCheckInParams | None = None
+    ) -> PassRedemptionResult:
+        """Check in a membership pass.
+
+        Unlike an event check-in the pass is NOT consumed - it stays valid for the next
+        visit. On a quota-limited membership the remaining uses decrement, and a check-in
+        at zero is denied.
+        """
+        data = self._http.post(f"/api/passes/{pass_id}/membership/check-in", params)
+        return _build_dataclass(PassRedemptionResult, data)
+
+    def stamp(self, pass_id: str) -> PassRedemptionResult:
+        """Add one stamp to the stamp card behind this pass.
+
+        Repeat stamps on the same card are refused inside a short cooldown, so a double
+        scan at the till does not award two stamps.
+        """
+        # Sends {} deliberately: the endpoint binds a request DTO, and a body of None
+        # means no JSON and no Content-Type, which FastEndpoints answers with 415.
+        data = self._http.post(f"/api/passes/{pass_id}/stamp", {})
+        return _build_dataclass(PassRedemptionResult, data)
+
+    def unstamp(self, pass_id: str) -> PassRedemptionResult:
+        """Take back the most recent stamp, for correcting a mis-scan.
+
+        Refused when there is nothing to undo, or when the last stamp was paid for by an
+        external order.
+        """
+        # See stamp(): {} rather than None, or the request-DTO endpoint answers 415.
+        data = self._http.post(f"/api/passes/{pass_id}/unstamp", {})
+        return _build_dataclass(PassRedemptionResult, data)
+
+    def redeem_by_scan(self, params: RedeemByScanParams) -> PassRedemptionResult:
+        """Resolve a scanned barcode or NFC tap value and redeem it in one call."""
+        data = self._http.post("/api/passes/redeem-by-scan", params)
         return _build_dataclass(PassRedemptionResult, data)
 
     def get_batch_status(self, batch_id: str) -> BatchStatusResult:
