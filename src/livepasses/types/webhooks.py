@@ -10,15 +10,30 @@ from typing import Literal
 # a "not yet supported" event - it is a request that always fails.
 WebhookEventType = Literal[
     "pass.generated",
+    # The holder saved the pass to a wallet: it went from no device to one. A second device does
+    # not fire it again; a re-add after "pass.removed" does.
+    "pass.installed",
+    # The holder removed the pass from their wallet and it is on no device. Holder-initiated only:
+    # cancellation, transfer and operator ejection never fire it.
+    "pass.removed",
     "pass.redeemed",
     "pass.updated",
+    "pass.cancelled",
+    "pass.expired",
     "loyalty.transacted",
     "coupon.applied",
+    # A membership pass was scanned at a door. Distinct from "pass.redeemed", which for a
+    # single-use pass means the entitlement is now spent.
+    "membership.checked_in",
     "transfer.initiated",
     "transfer.accepted",
     "transfer.declined",
     "transfer.revoked",
     "transfer.expired",
+    # Advisory: raised when membership sharing detection flags a pass, e.g. the same card
+    # checking in at too many distinct venues within a window. The triggering check-in still
+    # succeeded; this event never blocks or denies anything.
+    "pass.sharing_suspected",
     "*",  # every event above
 ]
 

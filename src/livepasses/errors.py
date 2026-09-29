@@ -24,7 +24,23 @@ class AuthenticationError(LivepassesError):
 
 
 class ValidationError(LivepassesError):
-    """Raised for 400 validation errors."""
+    """Raised for validation errors (usually 400).
+
+    ``fields`` maps each failing field to its messages. Its keys are the API's camelCase field
+    paths exactly as sent (for example ``operations[0].path``); they are not converted to
+    snake_case, so they match the request body you sent.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        status: int,
+        code: str,
+        details: str | None = None,
+        fields: dict[str, list[str]] | None = None,
+    ) -> None:
+        super().__init__(message, status, code, details)
+        self.fields = fields
 
 
 class ForbiddenError(LivepassesError):
@@ -51,7 +67,7 @@ class RateLimitError(LivepassesError):
 
 
 class QuotaExceededError(LivepassesError):
-    """Raised when API quota is exceeded."""
+    """Raised when API quota is exceeded (the API answers 422)."""
 
 
 class BusinessRuleError(LivepassesError):
@@ -109,14 +125,25 @@ def create_typed_error(
     code: str,
     details: str | None = None,
     retry_after: int | None = None,
+    fields: dict[str, list[str]] | None = None,
 ) -> LivepassesError:
-    """Create a typed error based on the error code or HTTP status."""
+    """Create a typed error based on the HTTP status and error code.
+
+    The status decides first for 401 and 403 (a 403 carrying UNAUTHORIZED is a permission
+    refusal, not a bad key), then the code, then the remaining statuses. A 409 conflict has no
+    class of its own and stays a LivepassesError. Every error carries the real status.
+    """
+    if status == 401:
+        return AuthenticationError(message, status, code, details)
+    if status == 403:
+        return ForbiddenError(message, status, code, details)
+
     if code in _AUTH_CODES:
         return AuthenticationError(message, status, code, details)
     if code in _FORBIDDEN_CODES:
         return ForbiddenError(message, status, code, details)
     if code in _VALIDATION_CODES:
-        return ValidationError(message, status, code, details)
+        return ValidationError(message, status, code, details, fields)
     if code in _NOT_FOUND_CODES:
         return NotFoundError(message, status, code, details)
     if code in _RATE_LIMIT_CODES:
@@ -127,12 +154,12 @@ def create_typed_error(
         return BusinessRuleError(message, status, code, details)
 
     # Fallback: map by HTTP status
-    if status == 401:
-        return AuthenticationError(message, status, code, details)
-    if status == 403:
-        return ForbiddenError(message, status, code, details)
+    if status == 400:
+        return ValidationError(message, status, code, details, fields)
     if status == 404:
         return NotFoundError(message, status, code, details)
+    if status == 422:
+        return BusinessRuleError(message, status, code, details)
     if status == 429:
         return RateLimitError(message, status, code, details, retry_after)
 

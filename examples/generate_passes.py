@@ -25,6 +25,7 @@ from livepasses import (
     NotFoundError,
     PassRecipient,
     RateLimitError,
+    RedemptionLocation,
     ValidationError,
 )
 
@@ -112,7 +113,12 @@ def main() -> None:
         print(f"\nChecking in pass {pass_id}...")
         checkin = client.passes.check_in(
             pass_id,
-            CheckInParams(location="Main Entrance", latitude=4.6097, longitude=-74.0817),
+            CheckInParams(
+                gate="Main Entrance",
+                location=RedemptionLocation(
+                    name="Main Entrance", latitude=4.6097, longitude=-74.0817
+                ),
+            ),
         )
         print(f"  New status: {checkin.new_status}")
 

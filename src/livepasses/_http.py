@@ -4,14 +4,27 @@ from __future__ import annotations
 
 import random
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from typing import Any
 
 import httpx
 
-from livepasses._utils.case import keys_to_camel, keys_to_snake
+from livepasses._utils.case import keys_to_camel, keys_to_snake, to_camel_case
 from livepasses.errors import LivepassesError, create_typed_error
 from livepasses.types.common import PagedResponse, PaginationMetadata
+
+
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "PUT", "DELETE"})
+
+
+def _read_envelope(response: httpx.Response) -> dict[str, Any] | None:
+    """Parse the JSON envelope, or return None for an empty/non-JSON body
+    (a challenge 401, a proxy 5xx, or a 204)."""
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 @dataclass
@@ -74,36 +87,27 @@ class HttpClient:
         body: Any | None = None,
     ) -> Any:
         response = self._fetch_with_retry(method, path, params=params, body=body)
-        json_data: dict[str, Any] = response.json()
+        json_data = _read_envelope(response)
 
-        if not json_data.get("success", False):
-            error = json_data.get("error", {})
-            raise create_typed_error(
-                message=error.get("message", json_data.get("message", "Unknown error")),
-                status=response.status_code,
-                code=error.get("code", "GENERAL_ERROR"),
-                details=error.get("details"),
-                retry_after=self._parse_retry_after(response),
-            )
+        if response.status_code >= 400 or (
+            json_data is not None and not json_data.get("success", False)
+        ):
+            raise self._to_error(response, (json_data or {}).get("error") or {})
 
-        return keys_to_snake(json_data.get("data"))
+        return keys_to_snake((json_data or {}).get("data"))
 
     def _request_paged(
         self, path: str, *, params: dict[str, Any] | None = None
     ) -> PagedResponse[Any]:
         response = self._fetch_with_retry("GET", path, params=params)
-        json_data: dict[str, Any] = response.json()
+        json_data = _read_envelope(response)
 
-        if not json_data.get("success", False):
-            error = json_data.get("error", {})
-            raise create_typed_error(
-                message=error.get("message", json_data.get("message", "Unknown error")),
-                status=response.status_code,
-                code=error.get("code", "GENERAL_ERROR"),
-                details=error.get("details"),
-                retry_after=self._parse_retry_after(response),
-            )
+        if response.status_code >= 400 or (
+            json_data is not None and not json_data.get("success", False)
+        ):
+            raise self._to_error(response, (json_data or {}).get("error") or {})
 
+        json_data = json_data or {}
         raw_pagination = json_data.get("pagination", {})
         pagination = PaginationMetadata(
             current_page=raw_pagination.get("currentPage", 1),
@@ -113,6 +117,18 @@ class HttpClient:
         )
         items = [keys_to_snake(item) for item in json_data.get("items", [])]
         return PagedResponse(items=items, pagination=pagination)
+
+    def _to_error(self, response: httpx.Response, error: dict[str, Any]) -> LivepassesError:
+        message = error.get("message")
+        code = error.get("code")
+        return create_typed_error(
+            message=message if message is not None else f"API request failed with status {response.status_code}",
+            status=response.status_code,
+            code=code if code is not None else "GENERAL_ERROR",
+            details=error.get("details"),
+            retry_after=self._parse_retry_after(response),
+            fields=error.get("fields"),
+        )
 
     def _fetch_with_retry(
         self,
@@ -124,7 +140,7 @@ class HttpClient:
     ) -> httpx.Response:
         url = path if path.startswith("/") else f"/{path}"
         query = self._build_query(params)
-        json_body = keys_to_camel(self._serialize_body(body)) if body is not None else None
+        json_body = _to_wire(body) if body is not None else None
 
         last_exc: Exception | None = None
         max_attempts = self._config.max_retries + 1
@@ -145,8 +161,14 @@ class HttpClient:
                     time.sleep(delay)
                     continue
 
-                # 5xx — retry with backoff (up to 2 extra retries)
-                if response.status_code >= 500 and attempt < min(max_attempts, 3):
+                # 5xx — retry with backoff (up to 2 extra retries), only for idempotent
+                # methods. No SDK sends an Idempotency-Key, so the gate is the HTTP
+                # method alone.
+                if (
+                    response.status_code >= 500
+                    and method.upper() in _IDEMPOTENT_METHODS
+                    and attempt < min(max_attempts, 3)
+                ):
                     time.sleep(self._backoff_delay(attempt))
                     continue
 
@@ -205,29 +227,23 @@ class HttpClient:
         base: float = min(1.0 * (2 ** (attempt - 1)), 30.0)
         return base + random.random() * 0.5  # noqa: S311
 
-    @staticmethod
-    def _serialize_body(body: Any) -> Any:
-        """Convert dataclass instances to dicts, stripping None values."""
-        if hasattr(body, "__dataclass_fields__"):
-            raw = asdict(body)
-            return _strip_none(raw)
-        if isinstance(body, dict):
-            return _strip_none(body)
-        return body
+def _to_wire(obj: Any) -> Any:
+    """Convert a request body to its JSON wire shape.
 
-
-def _strip_none(d: dict[str, Any]) -> dict[str, Any]:
-    """Recursively remove keys with None values from a dict."""
-    result: dict[str, Any] = {}
-    for k, v in d.items():
-        if v is None:
-            continue
-        if isinstance(v, dict):
-            result[k] = _strip_none(v)
-        elif isinstance(v, list):
-            result[k] = [
-                _strip_none(item) if isinstance(item, dict) else item for item in v
-            ]
-        else:
-            result[k] = v
-    return result
+    Dataclasses and dicts get camelCase keys and lose ``None`` values, recursively.
+    A dataclass field marked ``verbatim`` in its metadata (``updated_fields``,
+    ``metadata``) holds the caller's own data and is sent exactly as written.
+    """
+    if is_dataclass(obj) and not isinstance(obj, type):
+        wire: dict[str, Any] = {}
+        for f in fields(obj):
+            value = getattr(obj, f.name)
+            if value is None:
+                continue
+            wire[to_camel_case(f.name)] = value if f.metadata.get("verbatim") else _to_wire(value)
+        return wire
+    if isinstance(obj, dict):
+        return {to_camel_case(k): _to_wire(v) for k, v in obj.items() if v is not None}
+    if isinstance(obj, list):
+        return [_to_wire(item) for item in obj]
+    return obj

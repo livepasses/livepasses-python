@@ -7,10 +7,13 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from livepasses import Livepasses
+from livepasses._http import HttpClient, HttpClientConfig
 from livepasses.errors import (
     AuthenticationError,
+    ForbiddenError,
     LivepassesError,
     NotFoundError,
+    QuotaExceededError,
     RateLimitError,
     ValidationError,
 )
@@ -23,6 +26,18 @@ def client() -> Livepasses:
         "test-api-key",
         base_url="https://api.test.livepasses.com",
         max_retries=0,
+    )
+
+
+@pytest.fixture()
+def http_client() -> HttpClient:
+    return HttpClient(
+        HttpClientConfig(
+            api_key="test-api-key",
+            base_url="https://api.test.livepasses.com",
+            timeout=30.0,
+            max_retries=0,
+        )
     )
 
 
@@ -171,3 +186,116 @@ def test_paged_response_parsing(httpx_mock: HTTPXMock, client: Livepasses) -> No
     assert result.pagination.total_items == 50
     assert result.pagination.current_page == 1
     assert result.items[0].id == "pass-001"
+
+
+def test_refusal_with_status_raises_typed_error_from_envelope(
+    http_client: HttpClient, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(
+        status_code=404,
+        json={
+            "success": False,
+            "data": None,
+            "error": {"code": "TEMPLATE_NOT_FOUND", "message": "gone"},
+        },
+    )
+    with pytest.raises(NotFoundError) as exc:
+        http_client.get("/api/templates/x")
+    assert exc.value.code == "TEMPLATE_NOT_FOUND"
+    assert exc.value.status == 404
+
+
+def test_validation_error_carries_fields(http_client: HttpClient, httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        status_code=400,
+        json={
+            "success": False,
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "bad",
+                "fields": {"name": ["required"]},
+            },
+        },
+    )
+    with pytest.raises(ValidationError) as exc:
+        http_client.post("/api/x", body={})
+    assert exc.value.fields == {"name": ["required"]}
+
+
+def test_empty_body_error_raises_typed_error(http_client: HttpClient, httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(status_code=404, content=b"")
+    with pytest.raises(NotFoundError):
+        http_client.delete("/api/webhooks/x")
+
+
+def test_forbidden_status_wins_over_an_unauthorized_code(
+    http_client: HttpClient, httpx_mock: HTTPXMock
+) -> None:
+    # A handler-level UNAUTHORIZED refusal answers 403: a permission problem, not a bad key.
+    httpx_mock.add_response(
+        status_code=403,
+        json={"success": False, "data": None, "error": {"code": "UNAUTHORIZED", "message": "no"}},
+    )
+    with pytest.raises(ForbiddenError) as exc:
+        http_client.get("/api/x")
+    assert exc.value.status == 403
+    assert exc.value.code == "UNAUTHORIZED"
+
+
+def test_quota_exceeded_carries_the_real_status(
+    http_client: HttpClient, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(
+        status_code=422,
+        json={"success": False, "data": None, "error": {"code": "QUOTA_EXCEEDED", "message": "limit"}},
+    )
+    with pytest.raises(QuotaExceededError) as exc:
+        http_client.post("/api/templates", body={})
+    assert exc.value.status == 422
+
+
+def test_empty_body_401_is_authentication_error(
+    http_client: HttpClient, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(status_code=401, content=b"")
+    with pytest.raises(AuthenticationError) as exc:
+        http_client.get("/api/x")
+    assert exc.value.status == 401
+
+
+def test_paged_refusal_raises_typed_error(http_client: HttpClient, httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        status_code=403,
+        json={
+            "success": False,
+            "error": {"code": "FORBIDDEN", "message": "nope"},
+        },
+    )
+    with pytest.raises(LivepassesError) as exc:
+        http_client.get_paged("/api/passes")
+    assert exc.value.status == 403
+    assert exc.value.code == "FORBIDDEN"
+
+
+def test_retries_server_error_only_for_idempotent_methods(
+    httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    retrying = HttpClient(
+        HttpClientConfig(
+            api_key="k",
+            base_url="https://api.test.livepasses.com",
+            timeout=30.0,
+            max_retries=3,
+        )
+    )
+    body = {"success": False, "error": {"code": "EXTERNAL_SERVICE_ERROR", "message": "upstream"}}
+    httpx_mock.add_response(status_code=502, json=body, is_reusable=True)
+
+    with pytest.raises(LivepassesError):
+        retrying.post("/api/passes/generate", body={})
+    assert len(httpx_mock.get_requests()) == 1
+
+    with pytest.raises(LivepassesError):
+        retrying.get("/api/passes/x")
+    assert len(httpx_mock.get_requests()) == 4

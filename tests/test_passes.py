@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
+import json
+
 import pytest
 from pytest_httpx import HTTPXMock
 
@@ -16,8 +19,13 @@ from livepasses import (
     LoyaltyTransactionParams,
     MembershipCheckInParams,
     PassRecipient,
+    PushTemplatePassesParams,
     RedeemByScanParams,
+    RedeemCouponParams,
     RedeemGiftCardParams,
+    RedeemPassParams,
+    RedemptionLocation,
+    UpdatePassParams,
 )
 from tests.mocks import (
     MOCK_BATCH_GENERATION_RESULT,
@@ -60,6 +68,30 @@ def test_generate_single_pass(httpx_mock: HTTPXMock, client: Livepasses) -> None
     assert result.is_async_processing is False
     assert len(result.passes) == 1
     assert result.passes[0].id == "pass-001"
+
+
+def test_generate_exposes_error_code_of_failed_recipient(httpx_mock: HTTPXMock, client: Livepasses) -> None:
+    failed = {
+        "batchId": "batch-003",
+        "templateId": "tmpl-001",
+        "totalPasses": 1,
+        "isAsyncProcessing": False,
+        "passes": [
+            {
+                "id": "failed_abc",
+                "status": "failed",
+                "errorCode": "MEMBERSHIP_NUMBER_CONFLICT",
+                "errorMessage": "Membership number 'MEM-001' already belongs to another member of this program.",
+                "platforms": {"apple": {"available": False}, "google": {"available": False}},
+                "businessData": {},
+            }
+        ],
+    }
+    httpx_mock.add_response(json=mock_api_response(failed))
+    result = client.passes.generate(_generate_params())
+    assert result.passes[0].status == "failed"
+    assert result.passes[0].error_code == "MEMBERSHIP_NUMBER_CONFLICT"
+    assert "MEM-001" in (result.passes[0].error_message or "")
 
 
 def test_generate_and_wait_sync(httpx_mock: HTTPXMock, client: Livepasses) -> None:
@@ -134,9 +166,17 @@ def test_check_in_with_location(httpx_mock: HTTPXMock, client: Livepasses) -> No
     )
     result = client.passes.check_in(
         "pass-001",
-        CheckInParams(location="Gate A", latitude=4.6, longitude=-74.1),
+        CheckInParams(
+            gate="A",
+            location=RedemptionLocation(name="Gate A", latitude=4.6, longitude=-74.1),
+        ),
     )
     assert result.new_status == "CheckedIn"
+    # Coordinates travel inside the location object; the API declares no top-level latitude.
+    assert json.loads(_last_body(httpx_mock)) == {
+        "gate": "A",
+        "location": {"name": "Gate A", "latitude": 4.6, "longitude": -74.1},
+    }
 
 
 def test_loyalty_transact(httpx_mock: HTTPXMock, client: Livepasses) -> None:
@@ -203,3 +243,125 @@ def test_redeem_by_scan(httpx_mock: HTTPXMock, client: Livepasses) -> None:
     assert request is not None
     assert request.url.path == "/api/passes/redeem-by-scan"
     assert b"scannedValue" in request.content
+
+
+# ---------------------------------------------------------------------------
+# Wire contract (#797): the API answers 400 for any body field it does not declare.
+# ---------------------------------------------------------------------------
+
+
+def _last_body(httpx_mock: HTTPXMock) -> bytes:
+    request = httpx_mock.get_request()
+    assert request is not None
+    return request.content
+
+
+def test_update_sends_exactly_the_declared_body(httpx_mock: HTTPXMock, client: Livepasses) -> None:
+    httpx_mock.add_response(json=mock_api_response(None))
+    client.passes.update(
+        "pass-001",
+        UpdatePassParams(
+            updated_fields={"validUntil": "2026-12-31", "memberTier": "Gold"},
+            reason="Upgrade",
+            message_header="Good news",
+            message_body="You are Gold now",
+            notify=True,
+        ),
+    )
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert request.method == "PUT"
+    assert request.url.path == "/api/passes/pass-001"
+    assert json.loads(request.content) == {
+        "updatedFields": {"validUntil": "2026-12-31", "memberTier": "Gold"},
+        "reason": "Upgrade",
+        "messageHeader": "Good news",
+        "messageBody": "You are Gold now",
+        "notify": True,
+    }
+
+
+def test_update_params_declare_only_what_the_api_reads() -> None:
+    names = {f.name for f in dataclasses.fields(UpdatePassParams)}
+    assert names == {"updated_fields", "reason", "message_header", "message_body", "notify"}
+
+
+def test_update_notify_only_sends_message_body(httpx_mock: HTTPXMock, client: Livepasses) -> None:
+    httpx_mock.add_response(json=mock_api_response(None))
+    client.passes.update("pass-001", UpdatePassParams(message_body="Doors open at 7"))
+    assert json.loads(_last_body(httpx_mock)) == {"messageBody": "Doors open at 7"}
+
+
+def test_update_leaves_caller_keys_and_values_inside_updated_fields_untouched(
+    httpx_mock: HTTPXMock, client: Livepasses
+) -> None:
+    """updatedFields is the caller's data: no key rewriting, and a None is sent, not dropped."""
+    httpx_mock.add_response(json=mock_api_response(None))
+    client.passes.update(
+        "pass-001",
+        UpdatePassParams(updated_fields={"validUntil": None, "custom_key": {"inner_key": 1}}),
+    )
+    assert json.loads(_last_body(httpx_mock)) == {
+        "updatedFields": {"validUntil": None, "custom_key": {"inner_key": 1}},
+    }
+
+
+def test_push_template_leaves_updated_fields_keys_untouched(
+    httpx_mock: HTTPXMock, client: Livepasses
+) -> None:
+    httpx_mock.add_response(json=mock_api_response(None))
+    client.passes.push_template(
+        "tmpl-001", PushTemplatePassesParams(updated_fields={"gate_info": "B"}, reason="Moved")
+    )
+    assert json.loads(_last_body(httpx_mock)) == {
+        "updatedFields": {"gate_info": "B"},
+        "reason": "Moved",
+    }
+
+
+def test_redeem_sends_location_object_and_metadata_verbatim(
+    httpx_mock: HTTPXMock, client: Livepasses
+) -> None:
+    httpx_mock.add_response(json=mock_api_response(MOCK_REDEMPTION_RESULT))
+    client.passes.redeem(
+        "pass-001",
+        RedeemPassParams(
+            redemption_channel="in_store",
+            location=RedemptionLocation(name="Store #1", latitude=4.6, longitude=-74.1),
+            metadata={"order_id": "12345"},
+        ),
+    )
+    assert json.loads(_last_body(httpx_mock)) == {
+        "redemptionChannel": "in_store",
+        "location": {"name": "Store #1", "latitude": 4.6, "longitude": -74.1},
+        "metadata": {"order_id": "12345"},
+    }
+
+
+def test_redeem_coupon_sends_declared_fields(httpx_mock: HTTPXMock, client: Livepasses) -> None:
+    httpx_mock.add_response(json=mock_api_response(MOCK_REDEMPTION_RESULT))
+    client.passes.redeem_coupon(
+        "pass-001",
+        RedeemCouponParams(
+            location_id="store-42",
+            transaction_amount=120.5,
+            transaction_currency="COP",
+            promo_code="SUMMER20",
+            metadata={"note": "Applied to order #12345"},
+        ),
+    )
+    assert json.loads(_last_body(httpx_mock)) == {
+        "locationId": "store-42",
+        "transactionAmount": 120.5,
+        "transactionCurrency": "COP",
+        "promoCode": "SUMMER20",
+        "metadata": {"note": "Applied to order #12345"},
+    }
+
+
+@pytest.mark.parametrize("params_cls", [RedeemPassParams, CheckInParams, RedeemCouponParams])
+def test_redemption_params_have_no_undeclared_fields(params_cls: type) -> None:
+    names = {f.name for f in dataclasses.fields(params_cls)}
+    assert "notes" not in names
+    assert "latitude" not in names
+    assert "longitude" not in names

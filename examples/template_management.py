@@ -35,11 +35,22 @@ def main() -> None:
             CreateTemplateParams(
                 name="VIP Concert Pass",
                 description="Premium concert ticket with VIP access",
+                # The template type is decided by which block is present:
+                # an "event" block makes an event ticket.
                 business_features={
-                    "passType": "event",
-                    "hasSeating": True,
-                    "hasGateInfo": True,
-                    "supportedPlatforms": ["apple", "google"],
+                    "event": {
+                        "eventName": "Aurora Music Fest",
+                        "eventDate": "2030-06-15T20:00:00Z",
+                        "venueName": "Aurora Arena",
+                        "showSeatNumbers": True,
+                        "showGateInfo": True,
+                        "sectionTypes": ["VIP"],
+                    },
+                    "branding": {
+                        "primaryColor": "#1A1A1D",
+                        "textColor": "#FFFFFF",
+                        "brandName": "AURORA FEST",
+                    },
                 },
             )
         )
@@ -53,12 +64,11 @@ def main() -> None:
             UpdateTemplateParams(
                 name="VIP Concert Pass v2",
                 description="Updated premium concert ticket with backstage access",
+                # PUT merges: send only what changed; omitted event fields keep their values.
                 business_features={
-                    "passType": "event",
-                    "hasSeating": True,
-                    "hasGateInfo": True,
-                    "hasBackstageAccess": True,
-                    "supportedPlatforms": ["apple", "google"],
+                    "event": {
+                        "sectionTypes": ["VIP", "Backstage"],
+                    },
                 },
             ),
         )

@@ -131,48 +131,61 @@ from livepasses import RedeemPassParams, RedemptionLocation
 # Generic redemption
 result = client.passes.redeem("pass-001")
 
-# Redemption with location
+# Redemption with location; free-text notes go in metadata
 result = client.passes.redeem("pass-001", RedeemPassParams(
     location=RedemptionLocation(name="Store #1", latitude=4.6097, longitude=-74.0817),
-    notes="Walk-in customer",
+    metadata={"note": "Walk-in customer"},
 ))
 ```
 
 ### Check-in (Events)
 
+Coordinates go inside `location`:
+
 ```python
-from livepasses import CheckInParams
+from livepasses import CheckInParams, RedemptionLocation
 
 result = client.passes.check_in("pass-001", CheckInParams(
-    location="Main Gate",
-    latitude=4.6097,
-    longitude=-74.0817,
+    gate="Main Gate",
+    location=RedemptionLocation(name="Main Gate", latitude=4.6097, longitude=-74.0817),
 ))
 ```
 
 ### Redeem Coupon
 
 ```python
-from livepasses import RedeemCouponParams
+from livepasses import RedeemCouponParams, RedemptionLocation
 
 result = client.passes.redeem_coupon("pass-001", RedeemCouponParams(
     location=RedemptionLocation(name="Store #42"),
-    notes="Applied to order #12345",
+    transaction_amount=45000,
+    transaction_currency="COP",
+    metadata={"note": "Applied to order #12345"},
 ))
 ```
 
+The API refuses any body field it does not declare with a `400`, so there is no `notes`
+parameter: put free text in `metadata`.
+
 ### Update a Pass
 
-Update business data or context on an existing pass:
+Change fields on one pass and, optionally, show the holder a message. `updated_fields`
+keys are the pass type's updatable field names as the API spells them (camelCase) and are
+sent exactly as written. Send a non-empty `updated_fields`, a non-empty `message_body`, or both.
 
 ```python
-from livepasses import UpdatePassParams, BusinessContext, LoyaltyContext
+from livepasses import UpdatePassParams
 
 client.passes.update("pass-001", UpdatePassParams(
-    business_data=BusinessData(current_points=750, member_tier="Platinum"),
-    business_context=BusinessContext(
-        loyalty=LoyaltyContext(program_update="Congratulations on reaching Platinum!"),
-    ),
+    updated_fields={"memberTier": "Platinum", "validUntil": "2026-12-31"},
+    reason="Tier upgrade",
+    message_body="Congratulations on reaching Platinum!",
+))
+
+# Silent change: no banner on the holder's phone
+client.passes.update("pass-001", UpdatePassParams(
+    updated_fields={"memberTier": "Platinum"},
+    notify=False,
 ))
 ```
 
@@ -254,10 +267,14 @@ from livepasses import CreateTemplateParams
 template = client.templates.create(CreateTemplateParams(
     name="VIP Event Pass",
     description="Premium event ticket template",
+    # The block you send decides the template type: "event" makes an event ticket.
     business_features={
-        "passType": "event",
-        "hasSeating": True,
-        "supportedPlatforms": ["apple", "google"],
+        "event": {
+            "eventName": "Aurora Music Fest",
+            "eventDate": "2030-06-15T20:00:00Z",
+            "venueName": "Aurora Arena",
+            "showSeatNumbers": True,
+        },
     },
 ))
 print(f"Created: {template.id} — {template.name}")
@@ -288,7 +305,7 @@ from livepasses import CreateWebhookParams
 
 webhook = client.webhooks.create(CreateWebhookParams(
     url="https://your-app.com/webhooks/livepasses",
-    events=["pass.generated", "pass.redeemed", "batch.completed"],
+    events=["pass.generated", "pass.redeemed", "pass.sharing_suspected"],
 ))
 print(f"Secret: {webhook.secret}")  # use this to verify webhook signatures
 
@@ -301,7 +318,7 @@ client.webhooks.delete(webhook.id)
 
 ## Error Handling
 
-The SDK raises typed exceptions that map to API error categories:
+Every refusal the API can make answers with a real HTTP status (`400`/`403`/`404`/`409`/`422`/`429`/`500`/`502`/`503`) and the envelope `{success:false,data:null,error:{code,message,details,timestamp,traceId,fields?}}`. The SDK raises a typed error from **any** status or body — including a status-only response it can't parse as JSON, such as a challenge `401` or a proxy error. All errors are typed for precise `except` handling:
 
 ```python
 from livepasses import (
@@ -358,14 +375,16 @@ except LivepassesError as e:
 
 ### Exception hierarchy
 
-| Exception | HTTP Status | When |
+| Exception | Typical status | When |
 |-----------|------------|------|
 | `AuthenticationError` | 401 | Invalid, expired, or revoked API key |
-| `ValidationError` | 400 | Request validation failed |
+| `ValidationError` | 400 | Request validation failed — carries `fields: dict[str, list[str]] \| None`, the field path -> validation messages map; keys are the API's camelCase field paths (e.g. `operations[0].path`), not converted to snake_case |
 | `ForbiddenError` | 403 | Insufficient permissions |
 | `NotFoundError` | 404 | Resource not found |
 | `RateLimitError` | 429 | Rate limit exceeded |
-| `QuotaExceededError` | 403 | API quota or subscription limit exceeded |
+| `QuotaExceededError` | 422 | API quota or subscription limit exceeded |
+
+The status column is the one each class usually carries; the error's `.status` is always the response's real HTTP status. A `401` is always the authentication error and a `403` always the forbidden error, whatever `error.code` says. A `409` without a mapped code, and every `5xx`, raise the base `LivepassesError`.
 | `BusinessRuleError` | 422 | Business rule violation (pass expired, already used, etc.) |
 
 ## Pagination
@@ -407,7 +426,7 @@ client = Livepasses(
 
 The SDK automatically retries:
 - **429 Too Many Requests** — honors `Retry-After` header
-- **5xx Server Errors** — exponential backoff with jitter
+- **5xx Server Errors** — exponential backoff with jitter, **only for idempotent methods** (`GET`, `HEAD`, `PUT`, `DELETE`). A `POST` that hits a `5xx` is not retried — no SDK sends an `Idempotency-Key`, so a retry could re-run a non-idempotent operation.
 
 ## Type Checking
 

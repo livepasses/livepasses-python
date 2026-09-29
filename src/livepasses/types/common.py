@@ -17,6 +17,8 @@ class ApiError:
     details: str | None = None
     timestamp: str | None = None
     trace_id: str | None = None
+    fields: dict[str, list[str]] | None = None
+    """Field name -> validation messages. Present only for VALIDATION_ERROR."""
 
 
 @dataclass

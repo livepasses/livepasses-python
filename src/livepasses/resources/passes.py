@@ -282,6 +282,8 @@ def _parse_generated_pass(data: dict[str, Any]) -> GeneratedPass:
         business_data=business_data,
         qr_code=data.get("qr_code"),
         status=data.get("status", ""),
+        error_code=data.get("error_code"),
+        error_message=data.get("error_message"),
         analytics=data.get("analytics"),
     )
 

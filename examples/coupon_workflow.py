@@ -93,7 +93,7 @@ def main() -> None:
                         location=RedemptionLocation(
                             name="Store #42", latitude=4.6097, longitude=-74.0817
                         ),
-                        notes="Applied to order #12345",
+                        metadata={"note": "Applied to order #12345"},
                     ),
                 )
                 print(f"  Previous status: {redemption.previous_status}")

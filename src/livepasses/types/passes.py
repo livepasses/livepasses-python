@@ -138,30 +138,67 @@ class LookupPassParams:
     holder_email: str | None = None
 
 
+VERBATIM = {"verbatim": True}
+"""Field metadata marking a dict whose keys and values are the caller's own data.
+
+The SDK sends such a dict exactly as written: its keys are not converted to camelCase
+and ``None`` values inside it are not dropped.
+"""
+
+
+@dataclass
+class RedemptionLocation:
+    """Where a redemption happened. Sent on redeem/check-in and returned on the result."""
+
+    name: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+
+
 @dataclass
 class RedeemPassParams:
-    """Parameters for redeeming a pass."""
+    """Parameters for redeeming a pass.
 
-    location: str | None = None
-    notes: str | None = None
+    For free-text notes about the redemption use ``metadata``; the API declares no
+    ``notes`` field and refuses one with a ``400``.
+    """
+
+    accepted_types: list[str] | None = None
+    redemption_method: str | None = None  # API default: "manual"
+    redemption_channel: str | None = None
+    location: RedemptionLocation | None = None
+    confirmation_code: str | None = None
+    metadata: dict[str, str] | None = field(default=None, metadata=VERBATIM)
 
 
 @dataclass
 class CheckInParams:
-    """Parameters for checking in with a pass."""
+    """Parameters for checking in with a pass.
 
-    location: str | None = None
-    latitude: float | None = None
-    longitude: float | None = None
-    notes: str | None = None
+    Coordinates go inside ``location``. For free-text notes use ``metadata``.
+    """
+
+    accepted_types: list[str] | None = None
+    gate: str | None = None
+    section: str | None = None
+    redemption_method: str | None = None  # API default: "barcode_scan"
+    location: RedemptionLocation | None = None
+    metadata: dict[str, str] | None = field(default=None, metadata=VERBATIM)
 
 
 @dataclass
 class RedeemCouponParams:
-    """Parameters for redeeming a coupon pass."""
+    """Parameters for redeeming a coupon pass. For free-text notes use ``metadata``."""
 
-    location: str | None = None
-    notes: str | None = None
+    accepted_types: list[str] | None = None
+    redemption_channel: str | None = None  # API default: "in_store"
+    location: RedemptionLocation | None = None
+    location_id: str | None = None
+    transaction_amount: float | None = None
+    transaction_currency: str | None = None
+    promo_code: str | None = None
+    redemption_method: str | None = None
+    metadata: dict[str, str] | None = field(default=None, metadata=VERBATIM)
 
 
 @dataclass
@@ -203,17 +240,29 @@ class LoyaltyTransactionParams:
 
 @dataclass
 class UpdatePassParams:
-    """Parameters for updating a pass."""
+    """Parameters for updating a single pass (``PUT /api/passes/{id}``).
 
-    business_data: dict[str, object] | None = None
-    status: str | None = None
+    Send a non-empty ``updated_fields``, a non-empty ``message_body``, or both.
+    ``updated_fields`` keys are the pass type's updatable field names as the API spells
+    them (camelCase, e.g. ``"validUntil"``, ``"memberTier"``, ``"points"``); the SDK sends
+    them exactly as written.
+    """
+
+    updated_fields: dict[str, object] | None = field(default=None, metadata=VERBATIM)
+    reason: str | None = None  # up to 500 characters
+    message_header: str | None = None  # up to 80 characters
+    message_body: str | None = None  # up to 2000 characters
+    notify: bool | None = None  # False suppresses the holder-visible banner
 
 
 @dataclass
 class PushTemplatePassesParams:
-    """Parameters for pushing a scoped update to all eligible passes of a template."""
+    """Parameters for pushing a scoped update to all eligible passes of a template.
 
-    updated_fields: dict[str, object]
+    ``updated_fields`` keys are sent exactly as written (camelCase, as the API spells them).
+    """
+
+    updated_fields: dict[str, object] = field(metadata=VERBATIM)
     reason: str | None = None
 
 
@@ -313,6 +362,10 @@ class GeneratedPass:
     confirmation_code: str | None = None
     qr_code: str | None = None
     status: str = ""
+    error_code: str | None = None
+    """Present when ``status`` is ``"failed"``, e.g. ``"MEMBERSHIP_NUMBER_CONFLICT"``."""
+    error_message: str | None = None
+    """Present when ``status`` is ``"failed"``."""
     analytics: AnalyticsInfo | None = None
 
 
@@ -405,15 +458,6 @@ class PassValidationResult:
 # ---------------------------------------------------------------------------
 # Redemption
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class RedemptionLocation:
-    """Location where a redemption occurred."""
-
-    name: str | None = None
-    latitude: float | None = None
-    longitude: float | None = None
 
 
 @dataclass

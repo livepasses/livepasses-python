@@ -12,14 +12,12 @@ import sys
 
 from livepasses import (
     BusinessData,
-    BusinessContext,
     BusinessRuleError,
     CustomerInfo,
     GenerateAndWaitOptions,
     GeneratePassesParams,
     Livepasses,
     LivepassesError,
-    LoyaltyContext,
     LoyaltyTransactionParams,
     PassRecipient,
     UpdatePassParams,
@@ -100,13 +98,10 @@ def main() -> None:
         client.passes.update(
             pass_id,
             UpdatePassParams(
-                business_data=BusinessData(current_points=600, member_tier="Gold"),
-                business_context=BusinessContext(
-                    loyalty=LoyaltyContext(
-                        program_update="Congratulations! You've been upgraded to Gold tier!",
-                        seasonal_message="Enjoy double points this month!",
-                    ),
-                ),
+                # Keys are the API's field names, sent exactly as written.
+                updated_fields={"memberTier": "Gold"},
+                reason="Reached 500 points",
+                message_body="Congratulations! You've been upgraded to Gold tier!",
             ),
         )
         print("  Tier updated to Gold\n")
